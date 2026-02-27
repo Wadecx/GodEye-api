@@ -149,6 +149,82 @@ const userController = {
         message: 'Erreur serveur'
       });
     }
+  },
+
+  // Obtenir le quota de l'utilisateur connecté
+  async getQuota(req, res) {
+    try {
+      const result = await userService.canSearch(req.user.id);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          canSearch: result.allowed,
+          remaining: result.remaining,
+          used: result.used || 0,
+          max: result.max || 3
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Erreur serveur'
+      });
+    }
+  },
+
+  // Admin: Modifier le rôle d'un utilisateur
+  async updateUserRole(req, res) {
+    try {
+      const { userId } = req.params;
+      const { role } = req.body;
+
+      if (!role || !['user', 'admin', 'premium'].includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rôle invalide. Valeurs possibles: user, admin, premium'
+        });
+      }
+
+      await userService.updateRole(parseInt(userId), role);
+
+      res.status(200).json({
+        success: true,
+        message: `Rôle mis à jour en "${role}"`
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Erreur serveur'
+      });
+    }
+  },
+
+  // Admin: Modifier le quota de recherches d'un utilisateur
+  async updateUserQuota(req, res) {
+    try {
+      const { userId } = req.params;
+      const { maxSearches } = req.body;
+
+      if (!maxSearches || typeof maxSearches !== 'number' || maxSearches < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'maxSearches doit être un nombre positif'
+        });
+      }
+
+      await userService.updateMaxSearches(parseInt(userId), maxSearches);
+
+      res.status(200).json({
+        success: true,
+        message: `Quota mis à jour: ${maxSearches} recherches`
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Erreur serveur'
+      });
+    }
   }
 };
 

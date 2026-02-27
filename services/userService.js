@@ -1,9 +1,7 @@
 require('dotenv').config();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const initSqlJs = require('sql.js');
-const fs = require('fs');
-const path = require('path');
+const { Pool } = require('pg');
 
 // Vérifier que JWT_SECRET est défini
 if (!process.env.JWT_SECRET) {
@@ -11,135 +9,110 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+if (!process.env.DATABASE_URL) {
+  console.error('ERREUR CRITIQUE: DATABASE_URL non défini dans .env');
+  process.exit(1);
+}
+
 const JWT_SECRET = process.env.JWT_SECRET;
-const SALT_ROUNDS = 12; // Augmenté pour plus de sécurité
-const DB_PATH = process.env.DB_PATH
-  ? path.resolve(process.env.DB_PATH)
-  : path.join(__dirname, '../src/database.db');
+const SALT_ROUNDS = 12;
 
-let db = null;
+// Pool de connexions PostgreSQL (Neon)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-// Initialiser la base de donnees
+// Initialiser la base de données
 async function initDB() {
-  if (db) return db;
-
-  const SQL = await initSqlJs();
-
-  // Charger la base existante ou en creer une nouvelle
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
+  const client = await pool.connect();
+  try {
+    // Créer la table users si elle n'existe pas
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'user',
+        search_count INTEGER DEFAULT 0,
+        max_searches INTEGER DEFAULT 3,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('Base de données initialisée');
+  } finally {
+    client.release();
   }
-
-  // Creer la table users si elle n'existe pas
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  saveDB();
-  return db;
 }
 
-// Sauvegarder la base de donnees
-function saveDB() {
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(DB_PATH, buffer);
-}
-
-// Helper pour executer une requete avec parametres
-function queryOne(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return null;
-}
-
-function queryAll(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const results = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return results;
-}
+// Initialiser au démarrage
+initDB().catch(err => {
+  console.error('Erreur initialisation DB:', err);
+});
 
 const userService = {
   async register(name, email, password) {
-    await initDB();
+    const client = await pool.connect();
+    try {
+      // Vérifier si l'utilisateur existe déjà
+      const existing = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+      if (existing.rows.length > 0) {
+        throw new Error('Un utilisateur avec cet email existe déjà');
+      }
 
-    // Verifier si l'utilisateur existe deja
-    const existingUser = queryOne('SELECT * FROM users WHERE email = ?', [email]);
-    if (existingUser) {
-      throw new Error('Un utilisateur avec cet email existe deja');
+      // Hasher le mot de passe
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+      const now = new Date().toISOString();
+
+      // Créer l'utilisateur
+      const result = await client.query(
+        'INSERT INTO users (name, email, password, created_at, updated_at) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, created_at',
+        [name, email, hashedPassword, now, now]
+      );
+
+      return result.rows[0];
+    } finally {
+      client.release();
     }
-
-    // Hasher le mot de passe
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-
-    const now = new Date().toISOString();
-
-    // Creer l'utilisateur
-    db.run('INSERT INTO users (name, email, password, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [name, email, hashedPassword, now, now]);
-    saveDB();
-
-    // Recuperer l'ID du nouvel utilisateur
-    const newUser = queryOne('SELECT last_insert_rowid() as id');
-    const id = newUser.id;
-
-    return {
-      id,
-      name,
-      email,
-      created_at: now
-    };
   },
 
   async login(email, password) {
-    await initDB();
+    const client = await pool.connect();
+    try {
+      // Trouver l'utilisateur
+      const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+      const user = result.rows[0];
 
-    // Trouver l'utilisateur
-    const user = queryOne('SELECT * FROM users WHERE email = ?', [email]);
+      if (!user) {
+        throw new Error('Email ou mot de passe incorrect');
+      }
 
-    if (!user) {
-      throw new Error('Email ou mot de passe incorrect');
+      // Vérifier le mot de passe
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new Error('Email ou mot de passe incorrect');
+      }
+
+      // Générer le token JWT
+      const token = jwt.sign(
+        { id: user.id, email: user.email, name: user.name },
+        JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+
+      // Retourner l'utilisateur sans le mot de passe
+      const { password: _, ...userWithoutPassword } = user;
+      return {
+        user: userWithoutPassword,
+        token
+      };
+    } finally {
+      client.release();
     }
-
-    // Verifier le mot de passe
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new Error('Email ou mot de passe incorrect');
-    }
-
-    // Generer le token JWT
-    const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    // Retourner l'utilisateur et le token
-    const { password: _, ...userWithoutPassword } = user;
-    return {
-      user: userWithoutPassword,
-      token
-    };
   },
 
   verifyToken(token) {
@@ -151,10 +124,109 @@ const userService = {
   },
 
   async findById(id) {
-    await initDB();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'SELECT id, name, email, role, search_count, max_searches, created_at, updated_at FROM users WHERE id = $1',
+        [id]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  },
 
-    const user = queryOne('SELECT id, name, email, created_at, updated_at FROM users WHERE id = ?', [id]);
-    return user || null;
+  // Vérifier si l'utilisateur peut faire une recherche
+  async canSearch(userId) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'SELECT role, search_count, max_searches FROM users WHERE id = $1',
+        [userId]
+      );
+      const user = result.rows[0];
+
+      if (!user) return { allowed: false, reason: 'Utilisateur non trouvé' };
+
+      // Les admins ont des recherches illimitées
+      if (user.role === 'admin') {
+        return { allowed: true, remaining: 'illimité' };
+      }
+
+      // Vérifier le quota
+      if (user.search_count >= user.max_searches) {
+        return {
+          allowed: false,
+          reason: 'Quota de recherches atteint. Passez à un abonnement premium.',
+          used: user.search_count,
+          max: user.max_searches
+        };
+      }
+
+      return {
+        allowed: true,
+        remaining: user.max_searches - user.search_count,
+        used: user.search_count,
+        max: user.max_searches
+      };
+    } finally {
+      client.release();
+    }
+  },
+
+  // Incrémenter le compteur de recherches
+  async incrementSearchCount(userId) {
+    const client = await pool.connect();
+    try {
+      await client.query(
+        'UPDATE users SET search_count = search_count + 1, updated_at = $1 WHERE id = $2',
+        [new Date().toISOString(), userId]
+      );
+    } finally {
+      client.release();
+    }
+  },
+
+  // Mettre à jour le rôle d'un utilisateur (admin only)
+  async updateRole(userId, newRole) {
+    if (!['user', 'admin', 'premium'].includes(newRole)) {
+      throw new Error('Rôle invalide');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query(
+        'UPDATE users SET role = $1, updated_at = $2 WHERE id = $3',
+        [newRole, new Date().toISOString(), userId]
+      );
+    } finally {
+      client.release();
+    }
+  },
+
+  // Mettre à jour le quota de recherches (pour les abonnements)
+  async updateMaxSearches(userId, maxSearches) {
+    const client = await pool.connect();
+    try {
+      await client.query(
+        'UPDATE users SET max_searches = $1, updated_at = $2 WHERE id = $3',
+        [maxSearches, new Date().toISOString(), userId]
+      );
+    } finally {
+      client.release();
+    }
+  },
+
+  // Reset le compteur de recherches (pour un nouveau mois par exemple)
+  async resetSearchCount(userId) {
+    const client = await pool.connect();
+    try {
+      await client.query(
+        'UPDATE users SET search_count = 0, updated_at = $1 WHERE id = $2',
+        [new Date().toISOString(), userId]
+      );
+    } finally {
+      client.release();
+    }
   }
 };
 
