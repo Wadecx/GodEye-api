@@ -1,4 +1,5 @@
 const oathnetService = require('../services/oathnetService');
+const userService = require('../services/userService');
 
 const oathnetController = {
   // IP Geolocation
@@ -149,6 +150,12 @@ const oathnetController = {
         return res.status(400).json({ success: false, message: 'Parametre q (query) requis' });
       }
       const result = await oathnetService.searchBreach(q, cursor, dbnames);
+
+      // Incrémenter le compteur si l'utilisateur n'est pas admin
+      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
+        await userService.incrementSearchCount(req.user.id);
+      }
+
       res.status(200).json(result);
     } catch (error) {
       res.status(500).json({ success: false, message: error.message });
@@ -163,6 +170,12 @@ const oathnetController = {
         return res.status(400).json({ success: false, message: 'Query requise' });
       }
       const result = await oathnetService.searchStealer(query, type || 'email');
+
+      // Incrémenter le compteur si l'utilisateur n'est pas admin
+      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
+        await userService.incrementSearchCount(req.user.id);
+      }
+
       res.status(200).json(result);
     } catch (error) {
       res.status(500).json({ success: false, message: error.message });
@@ -177,6 +190,12 @@ const oathnetController = {
         return res.status(400).json({ success: false, message: 'Query requise' });
       }
       const result = await oathnetService.searchStealerV2(query, type || 'email', page || 1);
+
+      // Incrémenter le compteur si l'utilisateur n'est pas admin
+      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
+        await userService.incrementSearchCount(req.user.id);
+      }
+
       res.status(200).json(result);
     } catch (error) {
       res.status(500).json({ success: false, message: error.message });

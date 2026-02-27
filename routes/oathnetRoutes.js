@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const oathnetController = require('../controllers/oathnetController');
 const authMiddleware = require('../middlewares/authMiddleware');
-const { checkSearchQuota, incrementSearchCount } = require('../middlewares/quotaMiddleware');
+const { checkSearchQuota } = require('../middlewares/quotaMiddleware');
 
 // Toutes les routes sont protegees par authentification
 router.use(authMiddleware);
@@ -27,8 +27,8 @@ router.get('/discord/history', oathnetController.discordUsernameHistory);
 router.get('/discord/roblox', oathnetController.discordToRoblox);
 
 // Search - Breach & Stealer (avec vérification quota)
-router.get('/search/breach', checkSearchQuota, oathnetController.searchBreach, incrementSearchCount);
-router.get('/search/stealer', checkSearchQuota, oathnetController.searchStealer, incrementSearchCount);
-router.get('/search/stealer-v2', checkSearchQuota, oathnetController.searchStealerV2, incrementSearchCount);
+router.get('/search/breach', checkSearchQuota, oathnetController.searchBreach);
+router.get('/search/stealer', checkSearchQuota, oathnetController.searchStealer);
+router.get('/search/stealer-v2', checkSearchQuota, oathnetController.searchStealerV2);
 
 module.exports = router;
