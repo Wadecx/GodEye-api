@@ -151,9 +151,13 @@ const oathnetController = {
       }
       const result = await oathnetService.searchBreach(q, cursor, dbnames);
 
-      // Incrémenter le compteur si l'utilisateur n'est pas admin
-      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
-        await userService.incrementSearchCount(req.user.id);
+      // Incrémenter le compteur après une recherche réussie
+      if (req.user && req.user.id) {
+        try {
+          await userService.incrementSearchCount(req.user.id);
+        } catch (e) {
+          console.error('Erreur increment search count:', e);
+        }
       }
 
       res.status(200).json(result);
@@ -171,9 +175,13 @@ const oathnetController = {
       }
       const result = await oathnetService.searchStealer(query, type || 'email');
 
-      // Incrémenter le compteur si l'utilisateur n'est pas admin
-      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
-        await userService.incrementSearchCount(req.user.id);
+      // Incrémenter le compteur après une recherche réussie
+      if (req.user && req.user.id) {
+        try {
+          await userService.incrementSearchCount(req.user.id);
+        } catch (e) {
+          console.error('Erreur increment search count:', e);
+        }
       }
 
       res.status(200).json(result);
@@ -191,9 +199,13 @@ const oathnetController = {
       }
       const result = await oathnetService.searchStealerV2(query, type || 'email', page || 1);
 
-      // Incrémenter le compteur si l'utilisateur n'est pas admin
-      if (req.user && req.quota && req.quota.remaining !== 'illimité') {
-        await userService.incrementSearchCount(req.user.id);
+      // Incrémenter le compteur après une recherche réussie
+      if (req.user && req.user.id) {
+        try {
+          await userService.incrementSearchCount(req.user.id);
+        } catch (e) {
+          console.error('Erreur increment search count:', e);
+        }
       }
 
       res.status(200).json(result);
